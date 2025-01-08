@@ -1,8 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Chart as ChartJS, LinearScale, CategoryScale, BarElement, PointElement, Tooltip, Legend } from 'chart.js';
+import {
+  Chart as ChartJS,
+  LinearScale,
+  CategoryScale,
+  BarElement,
+  PointElement,
+  Tooltip,
+  Legend,
+} from 'chart.js';
 import { Bar } from 'react-chartjs-2';
-import axios from 'axios';
-
 
 ChartJS.register(LinearScale, CategoryScale, BarElement, PointElement, Tooltip, Legend);
 
@@ -12,18 +18,18 @@ const PerformanceChart = () => {
     datasets: [],
   });
 
-  const [last20MinData, setLast20MinData] = useState({
-    labels: [],
-    datasets: [],
-  });
+  const [timeFilter, setTimeFilter] = useState(''); // Default: no filter
+  const [ws, setWs] = useState(null); // WebSocket connection
 
-  
-  const fetchAllData = async () => {
+  const fetchData = async (minutes) => {
     try {
-      const response = await axios.get('http://localhost:5000/api/performance');
-      const data = response.data;
+      const url = minutes
+        ? `http://localhost:5000/api/performance?minutes=${minutes}`
+        : 'http://localhost:5000/api/performance';
 
-      
+      const response = await fetch(url);
+      const data = await response.json();
+
       const positive = data.reduce((sum, item) => sum + item.positive, 0);
       const negative = data.reduce((sum, item) => sum + item.negative, 0);
       const neutral = data.reduce((sum, item) => sum + item.neutral, 0);
@@ -39,53 +45,66 @@ const PerformanceChart = () => {
         ],
       });
     } catch (error) {
-      console.error('Error fetching all data:', error);
+      console.error('Error fetching filtered data:', error);
     }
   };
 
-  
-  const fetchLast20MinData = async () => {
-    try {
-      const response = await axios.get('http://localhost:5000/api/performance/last-20-min');
-      const data = response.data;
-
-      const labels = data.map((_, index) => `Entry ${index + 1}`);
-      const positives = data.map(item => item.positive);
-      const negatives = data.map(item => item.negative);
-      const neutrals = data.map(item => item.neutral);
-
-      setLast20MinData({
-        labels,
-        datasets: [
-          {
-            label: 'Positive',
-            data: positives,
-            backgroundColor: 'rgba(75, 192, 192, 0.5)',
-          },
-          {
-            label: 'Negative',
-            data: negatives,
-            backgroundColor: 'rgba(255, 99, 132, 0.5)',
-          },
-          {
-            label: 'Neutral',
-            data: neutrals,
-            backgroundColor: 'rgba(255, 206, 86, 0.5)',
-          },
-        ],
-      });
-    } catch (error) {
-      console.error('Error fetching last 20 minutes data:', error);
-    }
+  const handleFilterChange = (event) => {
+    const minutes = event.target.value;
+    setTimeFilter(minutes);
+    fetchData(minutes);
   };
 
   useEffect(() => {
-    fetchAllData();
-  }, []);
+    // Initial data fetch
+    fetchData();
+
+    // Establish WebSocket connection
+    const websocket = new WebSocket('ws://localhost:5000');
+    setWs(websocket);
+
+    // WebSocket message handler
+    websocket.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+
+      if (message.event === 'new-data') {
+        console.log('New data received via WebSocket:', message.data);
+        // Refetch data with the current filter applied
+        fetchData(timeFilter);
+      }
+    };
+
+    websocket.onclose = () => {
+      console.log('WebSocket connection closed.');
+    };
+
+    return () => {
+      // Clean up WebSocket connection
+      if (websocket) websocket.close();
+    };
+  }, [timeFilter]); // Reconnect WebSocket on filter change
 
   return (
     <div>
       <h2>Overall Performance</h2>
+
+      <div style={{ marginBottom: '20px' }}>
+        <label htmlFor="time-filter" style={{ marginRight: '10px' }}>
+          Filter by Time:
+        </label>
+        <select
+          id="time-filter"
+          value={timeFilter}
+          onChange={handleFilterChange}
+          style={{ padding: '5px', fontSize: '16px' }}
+        >
+          <option value="">All Time</option>
+          <option value="5">Last 5 Minutes</option>
+          <option value="10">Last 10 Minutes</option>
+          <option value="15">Last 15 Minutes</option>
+        </select>
+      </div>
+
       <Bar
         data={chartData}
         options={{
@@ -96,25 +115,6 @@ const PerformanceChart = () => {
           },
         }}
       />
-      <button onClick={fetchLast20MinData} style={{ marginTop: '20px', padding: '10px 20px' }}>
-        Show Last 20 Min Data
-      </button>
-
-      {last20MinData.labels.length > 0 && (
-        <>
-          <h2>Performance (Last 20 Minutes)</h2>
-          <Bar
-            data={last20MinData}
-            options={{
-              responsive: true,
-              plugins: {
-                legend: { position: 'top' },
-                tooltip: { enabled: true },
-              },
-            }}
-          />
-        </>
-      )}
     </div>
   );
 };
