@@ -57,7 +57,7 @@ const PerformanceChart = () => {
 
   useEffect(() => {
     // Initial data fetch
-    fetchData();
+    fetchData(timeFilter);
 
     // Establish WebSocket connection
     const websocket = new WebSocket('ws://localhost:5000');
