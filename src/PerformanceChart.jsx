@@ -3,7 +3,7 @@ import { Chart as ChartJS, LinearScale, CategoryScale, BarElement, PointElement,
 import { Bar } from 'react-chartjs-2';
 import axios from 'axios';
 
-// Register necessary Chart.js components
+
 ChartJS.register(LinearScale, CategoryScale, BarElement, PointElement, Tooltip, Legend);
 
 const PerformanceChart = () => {
@@ -17,13 +17,13 @@ const PerformanceChart = () => {
     datasets: [],
   });
 
-  // Fetch all data for the default chart
+  
   const fetchAllData = async () => {
     try {
       const response = await axios.get('http://localhost:5000/api/performance');
       const data = response.data;
 
-      // Aggregate performance data
+      
       const positive = data.reduce((sum, item) => sum + item.positive, 0);
       const negative = data.reduce((sum, item) => sum + item.negative, 0);
       const neutral = data.reduce((sum, item) => sum + item.neutral, 0);
@@ -43,7 +43,7 @@ const PerformanceChart = () => {
     }
   };
 
-  // Fetch last 20 minutes data for the special chart
+  
   const fetchLast20MinData = async () => {
     try {
       const response = await axios.get('http://localhost:5000/api/performance/last-20-min');
