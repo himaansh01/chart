@@ -1,62 +1,131 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
 const { WebSocketServer } = require('ws');
+const sqlite3 = require('sqlite3').verbose();
 
-// Initialize Express
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// MongoDB schema and model
-const performanceSchema = new mongoose.Schema(
-  {
-    positive: { type: Number, default: 0 },
-    negative: { type: Number, default: 0 },
-    neutral: { type: Number, default: 0 },
-  },
-  { timestamps: true }
-);
-const Performance = mongoose.model('Performance', performanceSchema);
+// Initialize SQLite database
+const db = new sqlite3.Database('./performance.db', (err) => {
+  if (err) {
+    console.error('Error connecting to SQLite database:', err);
+  } else {
+    console.log('Connected to SQLite database.');
 
-// Connect to MongoDB
-mongoose
-  .connect('mongodb+srv://manikantamannalliker:himaansh01@cluster0.8cdpsbn.mongodb.net/chart', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => console.log('Connected to MongoDB'))
-  .catch((err) => console.error('MongoDB connection error:', err));
-
-// REST API to fetch all or filtered data
-app.get('/api/performance', async (req, res) => {
-  try {
-    const { minutes } = req.query;
-
-    let filter = {};
-    if (minutes) {
-      const timeAgo = new Date(Date.now() - minutes * 60 * 1000);
-      filter = { createdAt: { $gte: timeAgo } };
-    }
-
-    const data = await Performance.find(filter);
-    res.json(data);
-  } catch (error) {
-    console.error('Error fetching performance data:', error);
-    res.status(500).json({ error: 'Failed to fetch data' });
+    // Create the Performance table if it doesn't exist
+    db.run(
+      `CREATE TABLE IF NOT EXISTS performance (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        positive INTEGER DEFAULT 0,
+        negative INTEGER DEFAULT 0,
+        neutral INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+      (err) => {
+        if (err) {
+          console.error('Error creating table:', err);
+        } else {
+          console.log('Performance table is ready.');
+        }
+      }
+    );
   }
 });
 
-// Start the HTTP server
-const PORT = 5000;
-const server = app.listen(PORT, () =>
-  console.log(`Server running on http://localhost:${PORT}`)
-);
+// REST API to fetch performance data with optional time filtering
+app.get('/api/performance', (req, res) => {
+  const minutes = req.query.minutes;
+
+  let query = `SELECT * FROM performance`;
+  const params = [];
+
+  if (minutes) {
+    query += ` WHERE created_at >= DATETIME('now', ?)`;
+    params.push(`-${minutes} minutes`);
+  }
+
+  db.all(query, params, (err, rows) => {
+    if (err) {
+      console.error('Error fetching performance data:', err);
+      res.status(500).json({ error: 'Failed to fetch data' });
+    } else {
+      res.json(rows);
+    }
+  });
+});
+
+// REST API to add new performance data
+app.post('/api/performance', (req, res) => {
+  const { positive, negative, neutral } = req.body;
+
+  if (
+    typeof positive !== 'number' ||
+    typeof negative !== 'number' ||
+    typeof neutral !== 'number'
+  ) {
+    return res.status(400).json({ error: 'Invalid input data. All fields must be numbers.' });
+  }
+
+  const query = `INSERT INTO performance (positive, negative, neutral) VALUES (?, ?, ?)`;
+  db.run(query, [positive, negative, neutral], function (err) {
+    if (err) {
+      console.error('Error inserting performance data:', err);
+      res.status(500).json({ error: 'Failed to add performance data' });
+    } else {
+      console.log('New performance data added:', { id: this.lastID, positive, negative, neutral });
+
+      // Broadcast the new data via WebSocket
+      const newData = {
+        id: this.lastID,
+        positive,
+        negative,
+        neutral,
+        created_at: new Date().toISOString(),
+      };
+      broadcast({ event: 'new-data', data: newData });
+
+      res.status(201).json(newData);
+    }
+  });
+});
+app.post('/api/performance', (req, res) => {
+  const { positive, negative, neutral } = req.body;
+
+  // Make sure the data is valid
+  if (typeof positive !== 'number' || typeof negative !== 'number' || typeof neutral !== 'number') {
+    return res.status(400).json({ error: 'Invalid input data. All fields must be numbers.' });
+  }
+
+  // SQL query to insert data into the performance table
+  const query = "INSERT INTO performance (positive, negative, neutral) VALUES (?, ?, ?)";
+  const values = [positive, negative, neutral];
+
+  // Insert data into SQLite
+  db.run(query, values, function(err) {
+    if (err) {
+      console.error('Error inserting data:', err);
+      return res.status(500).json({ error: 'Failed to insert data' });
+    }
+    // Send the response with the inserted data
+    res.status(201).json({ id: this.lastID, positive, negative, neutral });
+  });
+});
+
 
 // WebSocket Server
+const server = app.listen(5000, () => console.log('Server running on http://localhost:5000'));
 const wss = new WebSocketServer({ server });
 
-// Broadcast Function to send data to all connected clients
+wss.on('connection', (ws) => {
+  console.log('New WebSocket connection');
+
+  ws.on('message', (message) => {
+    console.log(`Received: ${message}`);
+  });
+});
+
 const broadcast = (data) => {
   wss.clients.forEach((client) => {
     if (client.readyState === 1) {
@@ -65,56 +134,9 @@ const broadcast = (data) => {
   });
 };
 
-// Handle WebSocket connections
-wss.on('connection', (ws) => {
-  console.log('New WebSocket connection');
-
-  ws.on('message', async (message) => {
-    try {
-      const { action, minutes } = JSON.parse(message);
-
-      if (action === 'filter') {
-        const timeAgo = new Date(Date.now() - minutes * 60 * 1000);
-        const filteredData = await Performance.find({ createdAt: { $gte: timeAgo } });
-
-        ws.send(
-          JSON.stringify({
-            event: 'filtered-data',
-            data: filteredData,
-          })
-        );
-      }
-    } catch (error) {
-      console.error('Error handling WebSocket message:', error);
-      ws.send(JSON.stringify({ event: 'error', message: 'Invalid message format or request' }));
-    }
-  });
-});
-
-// REST API to add new performance data
-app.post('/api/performance', async (req, res) => {
-  try {
-    const { positive, negative, neutral } = req.body;
-
-    if (
-      typeof positive !== 'number' ||
-      typeof negative !== 'number' ||
-      typeof neutral !== 'number'
-    ) {
-      return res.status(400).json({ error: 'Invalid input data. All fields must be numbers.' });
-    }
-
-    const newPerformance = new Performance({ positive, negative, neutral });
-    const savedData = await newPerformance.save();
-
-    console.log('New performance data added:', savedData);
-
-    // Broadcast the new data to all WebSocket clients
-    broadcast({ event: 'new-data', data: savedData });
-
-    res.status(201).json(savedData);
-  } catch (error) {
-    console.error('Error adding performance data:', error);
-    res.status(500).json({ error: 'Failed to add performance data' });
-  }
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('Closing SQLite database.');
+  db.close();
+  process.exit(0);
 });
